@@ -1,0 +1,42 @@
+# DistillCode-Agent — Deterministic sandbox for the requests target repo.
+# Build from the REPOSITORY ROOT (must stay at repo root; docker_runner.py
+# defaults to dockerfile_dir="." so the build context is the project root):
+#   docker build -f Dockerfile.sandbox -t distillcode/sandbox:requests .
+# Base: python:3.11-slim (Debian bookworm, ships coreutils `timeout` for hard kill).
+FROM python:3.11-slim
+
+# git + build tooling for editable install and pytest collection.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# Pin a stable requests release for reproducible trajectories.
+# Override at build time: --build-arg REQUESTS_REF=v2.32.3
+ARG REQUESTS_REF=v2.32.3
+ENV REQUESTS_REF=${REQUESTS_REF}
+
+# Bake the source into /workspace/repo.
+# At runtime you may mount a host checkout over /workspace/repo for debugging
+# without rebuilding (see docker_runner.DockerSandbox(host_repo_path=...)).
+RUN git clone --depth 1 --branch ${REQUESTS_REF} https://github.com/psf/requests.git /workspace/repo
+
+WORKDIR /workspace/repo
+# Install upstream dev deps so the baseline suite actually collects and passes.
+# requests' requirements-dev.txt already contains `-e .[socks]` plus
+# pytest, pytest-cov, pytest-httpbin==2.0.0, httpbin~=0.10.0, trustme, wheel,
+# but it puts NO bounds on the Flask / Werkzeug / httpbin stack. constraints.txt
+# pins that whole transitive tree to the versions measured green here, because
+# plan.md requires reproducible trajectories.
+# It is copied to /workspace (NOT /workspace/repo) on purpose: it must never
+# show up as a dirty file inside the target repo, and DockerSandbox.reset_repo()
+# runs `git clean -fd`, which would delete it if it lived in the repo.
+# pytest-timeout is installed separately (absent from upstream dev deps) as a
+# safety net for the Test Verifier Node; the hard 30s kill lives in docker_runner.
+COPY constraints.txt /workspace/constraints.txt
+RUN pip install --no-cache-dir -c /workspace/constraints.txt -r requirements-dev.txt \
+    && pip install --no-cache-dir -c /workspace/constraints.txt pytest-timeout
+
+# Keep the container alive so docker_runner can exec_run into it.
+CMD ["sleep", "infinity"]

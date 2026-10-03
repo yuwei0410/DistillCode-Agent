@@ -1,3 +1,14 @@
-# DistillCode-Agent — Python dependencies
-# Phase 1 / Day 1-2
+# DistillCode-Agent — host-side Python dependencies.
+# Phase 1 / Day 1-2 (Docker execution bridge) and Day 3-4 (deterministic tools).
+#
+# Deliberately minimal: `docker` is the ONLY third-party host dependency.
+#   * The Day 3-4 tool layer validates every model-emitted call with a small
+#     stdlib JSON-Schema subset validator (src/tools/base.py) instead of the
+#     `jsonschema` package, so schema enforcement has no version drift.
+#   * All file reads, AST indexing, patching and pytest execution happen inside
+#     the sandbox image (src/tools/container_runner.py, stdlib-only), so the host
+#     needs no pytest, no ripgrep and no copy of the target repository.
+#
+# Later phases append here: Day 5-7 the OpenAI-compatible LLM client, Day 17-20
+# the observability/metrics clients. Keep the pins (or lower bounds) explicit.
 docker>=7.0.0

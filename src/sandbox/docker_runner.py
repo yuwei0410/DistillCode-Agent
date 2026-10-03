@@ -76,11 +76,22 @@ class DockerSandbox:
         )
 
     def _ensure_container(self, auto_build: bool):
-        # Reuse if already running.
+        # Reuse if already running — but only if it actually runs the expected
+        # image. Name-based reuse without this check silently tests a wrong
+        # filesystem whenever an older/experimental container shares the name
+        # (every later "green" result then describes a repo nobody intended).
         try:
             container = self.client.containers.get(self.container_name)
             if container.status != "running":
                 container.start()
+            running_image = container.attrs.get("Config", {}).get("Image", "")
+            if running_image != self.image:
+                raise SandboxError(
+                    f"container '{self.container_name}' runs image "
+                    f"'{running_image}', but the sandbox expects '{self.image}'. "
+                    f"The leftover container is being reused; remove it first:\n"
+                    f"  docker rm -f {self.container_name}"
+                )
             return container
         except NotFound:
             pass
@@ -137,9 +148,22 @@ class DockerSandbox:
         )
 
     def reset_repo(self) -> RunResult:
-        """Restore /workspace/repo to its baked/original state between tasks."""
+        """Restore /workspace/repo to its baked/original state between tasks.
+
+        Deliberately NOT `git clean -fdx`: that would also delete
+        `requests.egg-info`, which the image's editable install (`-e .`) depends
+        on, breaking `import requests` for every later task.
+
+        The explicit sweep of .pytest_cache / __pycache__ is required, though,
+        because `git checkout` and `git clean -fd` both honour .gitignore and so
+        never remove ignored artifacts. Left in place they accumulate silently —
+        a stray .pytest_cache from a Day 1-2 smoke run is exactly what made the
+        "pristine repository" invariant look satisfied while it was not.
+        """
         return self.run_command(
-            f"git -C {REPO_PATH} checkout -- . && git -C {REPO_PATH} clean -fd"
+            f"git -C {REPO_PATH} checkout -- . && git -C {REPO_PATH} clean -fd && "
+            f"rm -rf {REPO_PATH}/.pytest_cache && "
+            f"find {REPO_PATH} -type d -name __pycache__ -prune -exec rm -rf {{}} +"
         )
 
     # ---- teardown --------------------------------------------------------
